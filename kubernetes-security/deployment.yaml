@@ -1,0 +1,78 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: otus-webserver
+  namespace: homework
+  labels:
+    app: otus-webserver
+spec:
+  replicas: 3
+  selector:
+    matchLabels:
+      app: otus-webserver
+  template:
+    metadata:
+      labels:
+        app: otus-webserver
+    spec:
+      initContainers:
+      - name: curl
+        image: curlimages/curl:8.6.0
+        env:
+        - name: SA_MONITORING_TOKEN
+          valueFrom:
+            secretKeyRef:
+              name: monitoring
+              key: token
+        - name: SA_MONITORING_CACERT_PATH
+          value: "/usr/local/share/ca-certificates/sa-monitoring/ca.crt"
+        - name: KUBERNETES_SERVICE_URL
+          value: "https://$(KUBERNETES_SERVICE_HOST):$(KUBERNETES_SERVICE_PORT)"
+        volumeMounts:
+        - name: shared-volume
+          mountPath: /init
+        - name: sa-monitoring-ca-crt-volume
+          mountPath: /usr/local/share/ca-certificates/sa-monitoring
+          readOnly: true
+        command: ["/bin/sh", "-c"]
+        args:
+        - |
+          echo '<!DOCTYPE html><html><head><meta charset="utf-8"></head><body><h1>Hello World!</h1><p>Hello World!</p></body></html>' > /init/index.html
+          curl $KUBERNETES_SERVICE_URL/metrics --cacert $SA_MONITORING_CACERT_PATH --header "Authorization: Bearer $SA_MONITORING_TOKEN" > /init/metrics.html
+      containers:
+      - name: nginx
+        image: nginx:1.25.3
+        ports:
+        - containerPort: 8000
+        volumeMounts:
+        - name: shared-volume
+          mountPath: /homework
+        - name: nginx-config-volume
+          mountPath: /etc/nginx
+          readOnly: true
+        lifecycle:
+          preStop:
+            exec:
+              command: ["rm", "-rf", "/homework/*"]
+        readinessProbe:
+          httpGet:
+            path: /index.html
+            port: 8000
+          initialDelaySeconds: 5
+          periodSeconds: 5
+      volumes:
+      - name: shared-volume
+        emptyDir: {}
+      - name: nginx-config-volume
+        configMap:
+          name: nginx-config
+          items:
+          - key: nginx.conf
+            path: nginx.conf
+      - name: sa-monitoring-ca-crt-volume
+        secret:
+          secretName: monitoring
+          items:
+          - key: ca.crt
+            path: ca.crt
+      serviceAccountName: monitoring
